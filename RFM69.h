@@ -39,15 +39,17 @@
  #elif defined(MPIDE)
   // Uno32 under old MPIDE, which has been discontinued:
   #define RF69_PLATFORM RF69_PLATFORM_UNO32
-#elif defined(NRF51)
+ #elif defined(NRF51)
   #define RF69_PLATFORM RF69_PLATFORM_NRF51
-#elif defined(NRF52)
+ #elif defined(NRF52)
   #define RF69_PLATFORM RF69_PLATFORM_NRF52
  #elif defined(ESP8266)
   #define RF69_PLATFORM RF69_PLATFORM_ESP8266
  #elif defined(ESP32)
   #define RF69_PLATFORM RF69_PLATFORM_ESP32
  #elif defined(ARDUINO)
+  #define RF69_PLATFORM RF69_PLATFORM_ARDUINO
+ #elif defined(AVR_ATtinyxy7) || defined(AVR_ATtinyxy6) // MegaTinyCore AVR Series-1
   #define RF69_PLATFORM RF69_PLATFORM_ARDUINO
  #elif defined(__MSP430G2452__) || defined(__MSP430G2553__)
   #define RF69_PLATFORM RF69_PLATFORM_MSP430
@@ -59,13 +61,19 @@
   #define RF69_PLATFORM RF69_PLATFORM_STM32STD
  #elif defined(RASPBERRY_PI)
   #define RF69_PLATFORM RF69_PLATFORM_RASPI
-#elif defined(__unix__) // Linux
+ #elif defined(__unix__) // Linux
   #define RF69_PLATFORM RF69_PLATFORM_UNIX
-#elif defined(__APPLE__) // OSX
+ #elif defined(__APPLE__) // OSX
   #define RF69_PLATFORM RF69_PLATFORM_UNIX
  #else
   #error Platform not defined! 	
  #endif
+#endif
+
+#if defined(ESP8266) || defined(ESP32)
+  #define ISR_PREFIX ICACHE_RAM_ATTR
+#else
+  #define ISR_PREFIX
 #endif
 
 // digitalPinToInterrupt is not available prior to Arduino 1.5.6 and 1.0.6
@@ -100,10 +108,12 @@
   // Everything else (including Due and Teensy) interrupt number the same as the interrupt pin number
   #define digitalPinToInterrupt(p) (p)
  #endif
+#elif defined(__SAMD21__) || defined (__SAMD51__) //Arduino.h in most/all cores wrongly "#define digitalPinToInterrupt(P) (P)" after calling variant.h
+  #define digitalPinToInterrupt(P)   (g_APinDescription[P].ulExtInt)
 #endif
 
 // On some platforms, attachInterrupt() takes a pin number, not an interrupt number
-#if (RF69_PLATFORM == RF69_PLATFORM_ARDUINO) && defined (__arm__) && (defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_SAM_DUE))
+#if (defined(TEENSYDUINO))||((RF69_PLATFORM == RF69_PLATFORM_ARDUINO) && defined (__arm__) && (defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_SAM_DUE)))
  #define RF69_ATTACHINTERRUPT_TAKES_PIN_NUMBER
 #endif
 ////////////////////////////////////////////////////
@@ -119,8 +129,18 @@
   #define RF69_IRQ_PIN          7
 #elif defined(__STM32F1__)
   #define RF69_IRQ_PIN          PA3
+#elif defined(MOTEINO_M0)
+  #define RF69_IRQ_PIN          9
+#elif defined(__SAMD51__)
+  #define RF69_IRQ_PIN          18
 #elif defined(ARDUINO_SAMD_ZERO) //includes Feather SAMD
   #define RF69_IRQ_PIN          3
+#elif defined(ESP8266)
+  #define RF69_IRQ_PIN          4
+  #define RF69_SPI_CS           15
+#elif defined(ESP32)
+  #define RF69_IRQ_PIN          2
+  #define RF69_SPI_CS           5
 #else
   #define RF69_IRQ_PIN          2
 #endif
@@ -141,7 +161,7 @@
 
 #define null                  0
 #define COURSE_TEMP_COEF    -90 // puts the temperature reading in the ballpark, user can fine tune the returned value
-#define RF69_BROADCAST_ADDR 255
+#define RF69_BROADCAST_ADDR   0
 #define RF69_CSMA_LIMIT_MS 1000
 #define RF69_TX_LIMIT_MS   1000
 #define RF69_FSTEP  61.03515625 // == FXOSC / 2^19 = 32MHz / 2^19 (p13 in datasheet)
@@ -150,7 +170,13 @@
 #define RFM69_CTL_SENDACK   0x80
 #define RFM69_CTL_REQACK    0x40
 
-//#define RF69_LISTENMODE_ENABLE  //comment this line out to compile sketches without the ListenMode (saves ~2k)
+#define RFM69_ACK_TIMEOUT   30  // 30ms roundtrip req for 61byte packets
+
+//Native hardware ListenMode is experimental
+//It was determined to be buggy and unreliable, see https://lowpowerlab.com/forum/low-power-techniques/ultra-low-power-listening-mode-for-battery-nodes/msg20261/#msg20261
+//uncomment to try ListenMode, adds ~1K to compiled size
+//FYI - 10bit addressing is not supported in ListenMode
+//#define RF69_LISTENMODE_ENABLE
 
 #if defined(RF69_LISTENMODE_ENABLE)
   // By default, receive for 256uS in listen mode and idle for ~1s
@@ -160,39 +186,41 @@
 
 class RFM69 {
   public:
-    static volatile uint8_t DATA[RF69_MAX_DATA_LEN]; // recv/xmit buf, including header & crc bytes
-    static volatile uint8_t DATALEN;
-    static volatile uint8_t SENDERID;
-    static volatile uint8_t TARGETID; // should match _address
-    static volatile uint8_t PAYLOADLEN;
-    static volatile uint8_t ACK_REQUESTED;
-    static volatile uint8_t ACK_RECEIVED; // should be polled immediately after sending a packet with ACK request
-    static volatile int16_t RSSI; // most accurate RSSI during reception (closest to the reception)
-    static volatile uint8_t _mode; // should be protected?
+    static uint8_t DATA[RF69_MAX_DATA_LEN+1]; // RX/TX payload buffer, including end of string NULL char
+    static uint8_t DATALEN;
+    static uint16_t SENDERID;
+    static uint16_t TARGETID; // should match _address
+    static uint8_t PAYLOADLEN;
+    static uint8_t ACK_REQUESTED;
+    static uint8_t ACK_RECEIVED; // should be polled immediately after sending a packet with ACK request
+    static int16_t RSSI; // most accurate RSSI during reception (closest to the reception). RSSI of last packet.
+    static uint8_t _mode; // should be protected?
 
     RFM69(uint8_t slaveSelectPin, uint8_t interruptPin, bool isRFM69HW, uint8_t interruptNum) //interruptNum is now deprecated
                 : RFM69(slaveSelectPin, interruptPin, isRFM69HW){};
 
-    RFM69(uint8_t slaveSelectPin=RF69_SPI_CS, uint8_t interruptPin=RF69_IRQ_PIN, bool isRFM69HW=false);
+    RFM69(uint8_t slaveSelectPin=RF69_SPI_CS, uint8_t interruptPin=RF69_IRQ_PIN, bool isRFM69HW=false, SPIClass *spi=nullptr);
 
-    bool initialize(uint8_t freqBand, uint8_t ID, uint8_t networkID=1);
-    void setAddress(uint8_t addr);
+    bool initialize(uint8_t freqBand, uint16_t ID, uint8_t networkID=1);
+    void setAddress(uint16_t addr);
     void setNetwork(uint8_t networkID);
     bool canSend();
-    virtual void send(uint8_t toAddress, const void* buffer, uint8_t bufferSize, bool requestACK=false);
-    virtual bool sendWithRetry(uint8_t toAddress, const void* buffer, uint8_t bufferSize, uint8_t retries=2, uint8_t retryWaitTime=40); // 40ms roundtrip req for 61byte packets
+    virtual void send(uint16_t toAddress, const void* buffer, uint8_t bufferSize, bool requestACK=false);
+    virtual bool sendWithRetry(uint16_t toAddress, const void* buffer, uint8_t bufferSize, uint8_t retries=2, uint8_t retryWaitTime=RFM69_ACK_TIMEOUT);
     virtual bool receiveDone();
-    bool ACKReceived(uint8_t fromNodeID);
+    bool ACKReceived(uint16_t fromNodeID);
     bool ACKRequested();
     virtual void sendACK(const void* buffer = "", uint8_t bufferSize=0);
     uint32_t getFrequency();
     void setFrequency(uint32_t freqHz);
     void encrypt(const char* key);
     void setCS(uint8_t newSPISlaveSelect);
-    int16_t readRSSI(bool forceTrigger=false);
-    void promiscuous(bool onOff=true);
+    int16_t readRSSI(bool forceTrigger=false); // *current* signal strength indicator; e.g. < -90dBm says the frequency channel is free + ready to transmit
+    void spyMode(bool onOff=true);
+    //void promiscuous(bool onOff=true); //replaced with spyMode()
     virtual void setHighPower(bool onOFF=true); // has to be called after initialize() for RFM69HW
     virtual void setPowerLevel(uint8_t level); // reduce/increase transmit power level
+    uint8_t getPowerLevel(); // get powerLevel	
     void sleep();
     uint8_t readTemperature(uint8_t calFactor=0); // get CMOS temperature (8bit)
     void rcCalibration(); // calibrate the internal RC oscillator for use in wide temperature variations - see datasheet section [4.3.5. RC Timer Accuracy]
@@ -203,24 +231,34 @@ class RFM69 {
     void readAllRegs();
     void readAllRegsCompact();
 
+    // ListenMode sleep/timer
+    void listenModeSleep(uint16_t millisInterval);
+
   protected:
     static void isr0();
-    void virtual interruptHandler();
+    void interruptHandler();
     virtual void interruptHook(uint8_t CTLbyte) {};
-    static volatile bool _inISR;
-    virtual void sendFrame(uint8_t toAddress, const void* buffer, uint8_t size, bool requestACK=false, bool sendACK=false);
+    static volatile bool _haveData;
+    virtual void sendFrame(uint16_t toAddress, const void* buffer, uint8_t size, bool requestACK=false, bool sendACK=false);
 
-    static RFM69* selfPointer;
+    // for ListenMode sleep/timer
+    static void delayIrq();
+    void endListenModeSleep();
+   
     uint8_t _slaveSelectPin;
     uint8_t _interruptPin;
     uint8_t _interruptNum;
-    uint8_t _address;
-    bool _promiscuousMode;
+    uint16_t _address;
+    bool _spyMode;
     uint8_t _powerLevel;
     bool _isRFM69HW;
+    SPIClass *_spi;
 #if defined (SPCR) && defined (SPSR)
     uint8_t _SPCR;
     uint8_t _SPSR;
+#endif
+#ifdef SPI_HAS_TRANSACTION
+  SPISettings _settings;
 #endif
 
     virtual void receiveBegin();
@@ -228,9 +266,9 @@ class RFM69 {
     virtual void setHighPowerRegs(bool onOff);
     virtual void select();
     virtual void unselect();
-    inline void maybeInterrupts();
 
 #if defined(RF69_LISTENMODE_ENABLE)
+  static RFM69* selfPointer;
   //=============================================================================
   //                     ListenMode specific declarations  
   //=============================================================================
@@ -255,7 +293,7 @@ class RFM69 {
     // is transmitted to the receiver, and it is expected that the receiver
     // wait for the burst to end before attempting a reply.
     // See RF69_LISTEN_BURST_REMAINING_MS above.
-    void listenModeSendBurst(uint8_t targetNode, void* buffer, uint8_t size);
+    void listenModeSendBurst(uint8_t targetNode, const void* buffer, uint8_t size);
 
   protected:
     void listenModeInterruptHandler(void);

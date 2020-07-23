@@ -1,9 +1,9 @@
 // *************************************************************************************************************
-// SwitchMote Moteino sample sketch with PIR motion sensor support
+// SwitchMote sample sketch
 // *************************************************************************************************************
 // Handles the single 5A relay SwitchMote, as well as the dual 10A relay SwitchMote2x10A
-// SwitchMote is a highly integrated wireless AC switch controller based on Moteino
 // https://lowpowerlab.com/switchmote
+// SwitchMote is a highly integrated wireless AC switch controller based on Moteino, the wirelessly programmable Arduino
 // *************************************************************************************************************
 // This sketch will provide the essential features of SwitchMote:
 //   - wireless programming
@@ -14,11 +14,10 @@
 //     ie - when a button is pressed on this SwitchMote it can trigger the press of a button on another SwitchMote
 //     so you can use a SwitchMote button to control a light/set of lights from remote locations
 //     this sketch allows up to 5 SYNCs but could be extended
-//   - Panasonic PIR motion sensor support in place of middle button
 // This sketch may be extended to include integration with other LowPowerLab automation products, for instance to
 //    control the GarageMote from a button on the SwitchMote, etc.
 // *************************************************************************************************************
-// Copyright Felix Rusu 2017, http://www.LowPowerLab.com/contact
+// Copyright Felix Rusu 2019, http://www.LowPowerLab.com/contact
 // **********************************************************************************
 // License
 // **********************************************************************************
@@ -54,33 +53,25 @@
 #define ENABLE_ATC         //comment out this line to disable AUTO TRANSMISSION CONTROL
 #define ATC_RSSI          -75
 // **********************************************************************************
-#define GATEWAYID           1  //always send messages to NodeID=1
-// **********************************************************************************
-#define PIRPRESENT         //un-comment if you have a panasonic PIR instead of the MIDDLE button
+#define GATEWAYID           1  //assumed 1 in general
+#define LED_RM             18  //digital pin for MIDDLE RED LED
+#define LED_GM             15  //digital pin for MIDDLE GREEN LED
 
-#ifdef PIRPRESENT
-  #define PIR_POWER        18 //PIR powered by D18
-  #define PIR_OUTPUT        5 //PIR output signal to D5 - SHARED WITH middle button!
-  #define PIR_DEBOUNCE   6000 //PIR signals valid at least this many ms apart
-  #define PIR_LED_ON     3000
-#endif
-// **********************************************************************************
-#define BTNCOUNT            2  //1 or 3 (2 also possible)
-#define BTNT                6  //digital pin of top button
-#define BTNB                4  //digital pin of bottom button
+#define LED_RT             17  //digital pin for TOP RED LED
+#define LED_GT             14  //digital pin for TOP GREEN LED
 
-#define LED_RT             16  //digital pin for TOP RED LED
-#define LED_GT             19  //digital pin for TOP GREEN LED
-#define LED_RM             15  //digital pin for MIDDLE RED LED
-//#define LED_GM             18  //digital pin for MIDDLE GREEN LED
-#define LED_RM             15  //digital pin for MIDDLE RED LED
-#define LED_RB             14  //digital pin for BOTTOM RED LED
-#define LED_GB             17  //digital pin for BOTTOM GREEN LE
+#define LED_RB             19  //digital pin for BOTTOM RED LED
+#define LED_GB             16  //digital pin for BOTTOM GREEN LED
 
 #define RELAY1              7  //digital pin connected to MAIN relay
 #define RELAY2              3  //digital pin connected to secondary relay (SwitchMote 2x10A only)
-#define RELAY1_INDEX        0  //index in btn[] array which is associated with the MAIN relay
-#define RELAY2_INDEX        1  //index in btn[] array which is associated with the secondary relay (SwitchMote 2x10A only)
+#define RELAY1_INDEX        1  //index in btn[] array which is associated with the MAIN relay
+#define RELAY2_INDEX        0  //index in btn[] array which is associated with the secondary relay (SwitchMote 2x10A only)
+
+#define BTNCOUNT            3  //1 or 3 (2 also possible)
+#define BTNM                5  //digital pin of middle button
+#define BTNT                6  //digital pin of top button
+#define BTNB                4  //digital pin of bottom button
 
 #define BUTTON_BOUNCE_MS  200  //timespan before another button change can occur
 #define SYNC_ENTER       3000  //time required to hold a button before SwitchMote enters [SYNC mode]
@@ -89,38 +80,36 @@
 #define SYNC_EEPROM_ADDR   64  //SYNC_TO and SYNC_INFO data starts at this EEPROM address
 #define ERASE_HOLD       6000  //time required to hold a button before SYNC data is erased
 #define MOTION_TIME_ON  60000  //time to hold a button/output HIGH after a motion triggered command
-// **********************************************************************************
+
 //in SYNC_INFO we're storing 4 pieces of information in each byte:
 #define SYNC_DIGIT_THISBTN  0 //first digit is the button pressed on this unit which will trigger an action on another unit
 #define SYNC_DIGIT_THISMODE 1 //second digit indicates the mode of this unit is in when triggering
 #define SYNC_DIGIT_SYNCBTN  2 //third digit indicates the button that should be requested to be "pressed" on the target
 #define SYNC_DIGIT_SYNCMODE 3 //fourth digit indicates the mode that should be requested on the target
 #define SYNC_MIN_TIME_LIMIT 2000 //minimum time limit since last SYNC before a new sync can be propagated (used to stop circular SYNC loops)
-// **********************************************************************************
-#define SERIAL_EN             //comment this out when deploying to an installed SM to save a few KB of sketch size
+
+#define DEBUG_EN              //comment this out when deploying to an installed SM to save a few KB of sketch size
 #define SERIAL_BAUD    115200
-#ifdef SERIAL_EN
+#ifdef DEBUG_EN
   #define DEBUG(input)   {Serial.print(input); delay(1);}
   #define DEBUGln(input) {Serial.println(input); delay(1);}
 #else
   #define DEBUG(input);
   #define DEBUGln(input);
 #endif
-// **********************************************************************************
+
 #define LED_PERIOD_ERROR   50
 #define LED_PERIOD_OK     200
 #define ON                  1
 #define OFF                 0
 #define PRESSED             0
 #define RELEASED            1
-#define FLASHMEM_CS         8 //FLASH_MEM SPI CS on D8
-// **********************************************************************************
-//Structure used to store Moteino configuration in EEPROM
+
 struct configuration {
   byte frequency;
   byte isHW;
-  byte nodeID;    // 8bit address (up to 255)
-  byte networkID; // 8bit address (up to 255)
+  byte nodeID;        // 8bit address (up to 255)
+  byte networkID;     // 8bit address (up to 255)
   char encryptionKey[16];
   byte separator1;
   char description[10];
@@ -148,27 +137,23 @@ int SYNC_INFO[SYNC_MAX_COUNT]; // stores the buttons and modes of this and the r
   RFM69 radio;
 #endif
 
-SPIFlash flash(FLASHMEM_CS, 0xEF30);     //FLASH MEM CS pin is wired to Moteino D8
+SPIFlash flash(8, 0xEF30);     //FLASH MEM CS pin is wired to Moteino D8
 unsigned long syncStart=0;
 unsigned long now=0;
 byte btnIndex=0; // as the sketch loops this index will loop through the available physical buttons
 byte mode[] = {ON,ON,ON}; //could use single bytes for efficiency but keeping it separate for clarity
-byte btn[] = {BTNT, BTNB};
+byte btn[] = {BTNT, BTNM, BTNB};
 byte btnLastState[]={RELEASED,RELEASED,RELEASED};
 unsigned long btnLastPress[]={0,0,0};
-byte btnLEDRED[] = {LED_RT, LED_RB};
-byte btnLEDGRN[] = {LED_GT, LED_GB};
+byte btnLEDRED[] = {LED_RT, LED_RM, LED_RB};
+byte btnLEDGRN[] = {LED_GT, LED_GM, LED_GB};
 uint32_t lastSYNC=0; //remember last status change - used to detect & stop loop conditions in circular SYNC scenarios
 char * buff="justAnEmptyString";
 byte len=0;
 
-#ifdef PIRPRESENT
-  boolean PIR_MOTION_RELAY=false;
-#endif
-
 void setup(void)
 {
-  #ifdef SERIAL_EN
+  #ifdef DEBUG_EN
     Serial.begin(SERIAL_BAUD);
   #endif
   EEPROM.setMaxAllowedWrites(10000);
@@ -198,14 +183,14 @@ void setup(void)
   radio.enableAutoPower(ATC_RSSI);
   DEBUGln(F("\r\nRFM69_ATC Enabled (Auto Transmission Control)"));
 #endif
-  
-  pinMode(LED_RM, OUTPUT);//pinMode(LED_GM, OUTPUT);
+
+  pinMode(LED_RM, OUTPUT);pinMode(LED_GM, OUTPUT);
   pinMode(LED_RT, OUTPUT);pinMode(LED_GT, OUTPUT);
   pinMode(LED_RB, OUTPUT);pinMode(LED_GB, OUTPUT);
   // by writing HIGH while in INPUT mode, the internal pullup is activated
   // the button will read 1 when RELEASED (because of the pullup)
   // the button will read 0 when PRESSED (because it's shorted to GND)
-  //pinMode(BTNM, INPUT);digitalWrite(BTNM, HIGH); //activate pullup
+  pinMode(BTNM, INPUT);digitalWrite(BTNM, HIGH); //activate pullup
   pinMode(BTNT, INPUT);digitalWrite(BTNT, HIGH); //activate pullup
   pinMode(BTNB, INPUT);digitalWrite(BTNB, HIGH); //activate pullup
   pinMode(RELAY1, OUTPUT);
@@ -217,16 +202,10 @@ void setup(void)
   DEBUG(F("|-----------------------------------------------------------"));
   //initialize LEDs according to default modes
   action(btnIndex, OFF, false);btnIndex++;
+  action(btnIndex, OFF, false);btnIndex++;
   action(btnIndex, OFF, false);
   
   displayMainMenu();
-
-#ifdef PIRPRESENT
-  pinMode(PIR_POWER, OUTPUT);
-  PIR_ONOFF(HIGH); //give power to the PIR
-  digitalWrite(PIR_OUTPUT, LOW); //cancel the pullup activation from BTNM above
-  digitalWrite(LED_RM, LOW);
-#endif
 }
 
 byte btnState=RELEASED;
@@ -234,53 +213,11 @@ boolean isSyncMode=0;
 boolean ignorePress=false;
 unsigned long int offTimer=0;
 byte offIndex=0;
-
-#ifdef PIRPRESENT
-  byte motionDetected=false;
-  unsigned long lastMotionTime=0;
-#endif
-
-void PIR_ONOFF(byte state) {
-  digitalWrite(PIR_POWER, state);
-}
-
 void loop()
 {
   if(Serial.available())
     handleMenuInput(Serial.read());
-
-#ifdef PIRPRESENT
-  //check motion sensor
-  if (digitalRead(PIR_OUTPUT) && motionDetected==false && millis()-lastMotionTime > PIR_DEBOUNCE)
-  {
-    motionDetected=true;
-    digitalWrite(LED_RM, HIGH);
-    lastMotionTime = millis();
-
-    if (radio.sendWithRetry(GATEWAYID, "MOTION", 6))
-    {
-      DEBUG("MOTION ACK:OK! RSSI:");
-      DEBUGln(radio.RSSI);
-    }
-    else DEBUGln("MOTION ACK:NOK...");
     
-    if (PIR_MOTION_RELAY)
-    {
-      offTimer = millis();
-      if(mode[offIndex] != ON) //only take action when mode is not already ON
-      {
-        action(offIndex, ON, true); //senderID!=GATEWAYID
-        checkSYNC(0);
-      }
-    }
-  }
-  else if (motionDetected && millis()-lastMotionTime > PIR_LED_ON) //RED-LED-MIDDLE light up for 3 sec
-  {
-    motionDetected = false;
-    digitalWrite(LED_RM, LOW);
-  }
-#endif
-
   //on each loop pass check the next button
   if (isSyncMode==false)
   {
@@ -289,32 +226,15 @@ void loop()
   }
   btnState = digitalRead(btn[btnIndex]);
   now = millis();
-
+  
   if (btnState != btnLastState[btnIndex] && now-btnLastPress[btnIndex] >= BUTTON_BOUNCE_MS) //button event happened
   {
     btnLastState[btnIndex] = btnState;
-    if (btnState == PRESSED) btnLastPress[btnIndex] = now;
+    if (btnState == PRESSED) btnLastPress[btnIndex] = now;    
 
     //if normal button press, do the RELAY/LED action and notify sync-ed SwitchMotes
     if (btnState == RELEASED && !isSyncMode)
     {
-      DEBUG("BTN PRESS: ");DEBUGln(btnIndex);
-      
-      //when PIR is installed, both button pressed toggles PIR ON/OFF
-#ifdef PIRPRESENT
-      if (BTNCOUNT == 2)
-      {
-        byte otherBtnIndex = (btnIndex == 0 ? 1:0);
-        if (digitalRead(btn[otherBtnIndex]) == RELEASED && now-btnLastPress[otherBtnIndex] >= BUTTON_BOUNCE_MS && now-btnLastPress[otherBtnIndex] <= 2*BUTTON_BOUNCE_MS)
-        {
-          //other button was also pressed at same time, toggle PIR-motion->RELAY-ON function
-          PIR_MOTION_RELAY = !PIR_MOTION_RELAY;
-          DEBUG("PIR_MOTION_RELAY: ");DEBUGln(PIR_MOTION_RELAY);
-          return; //don't do anything else
-        }
-      }
-#endif
-
       ignorePress=false;
       action(btnIndex, mode[btnIndex]==ON ? OFF : ON);
       checkSYNC(0);
@@ -328,11 +248,12 @@ void loop()
     // "SYNC?" means "is there anyone wanting to Synchronize with me?"
     // response "SYNCx:0" (meaning "OK, SYNC with me and turn my button x OFF")
     // response "SYNCx:1" (meaning "OK, SYNC with me and turn my button x ON")
+    // response "SYNCx:9" (meaning "OK, SYNC with me and SYNC button x BOTH ways (ie EASY MODE - ON:ON & OFF:OFF)")
     // no response means no other SwMote in range is in SYNC mode, so enter SYNC and
     //    listen for another SwMote to broadcast its SYNC token
     if (radio.sendWithRetry(RF69_BROADCAST_ADDR,"SYNC?",5))
     {
-      DEBUG(F("GOT SYNC? REPLY FROM ["));
+      DEBUG(F("\nGOT SYNC? REPLY FROM ["));
       DEBUG(radio.SENDERID);
       DEBUG(F(":"));DEBUG(radio.DATALEN);DEBUG(F("]:["));
       for (byte i = 0; i < radio.DATALEN; i++)
@@ -341,11 +262,11 @@ void loop()
 
       //ACK received, check payload
       if (radio.DATALEN==7 && radio.DATA[0]=='S' && radio.DATA[1]=='Y' && radio.DATA[2]=='N' && radio.DATA[3]=='C' && radio.DATA[5]==':'
-          && radio.DATA[4]>='0' && radio.DATA[4]<='2' && (radio.DATA[6]=='0' || radio.DATA[6]=='1'))
+          && radio.DATA[4]>='0' && radio.DATA[4]<='2' && (radio.DATA[6]=='0' || radio.DATA[6]=='1' || radio.DATA[6]=='9'))
       {
         if (addSYNC(radio.SENDERID, radio.DATA[4]-'0', radio.DATA[6]-'0'))
           blinkLED(btnLEDGRN[btnIndex],LED_PERIOD_OK,LED_PERIOD_OK,3);
-        else 
+        else
           blinkLED(btnLEDRED[btnIndex],LED_PERIOD_ERROR,LED_PERIOD_ERROR,3);
 
         action(btnIndex, mode[btnIndex]);
@@ -362,7 +283,7 @@ void loop()
     else { DEBUGln(F("NO SYNC REPLY ..")); }
 
     isSyncMode = true;
-    DEBUGln(F("SYNC MODE ON"));
+    DEBUGln(F("SYNC MODE ENTER"));
     displaySYNC();
     syncStart = now;
   }
@@ -370,7 +291,7 @@ void loop()
   //if button held for more than ERASE_TRIGGER, erase SYNC table
   if (isSyncMode==true && btnState == PRESSED && now-btnLastPress[btnIndex] >= ERASE_HOLD && !ignorePress)
   {
-    DEBUG(F("ERASING SYNC TABLE ... "));
+    DEBUG(F("\nERASING SYNC TABLE ... "));
     eraseSYNC();
     isSyncMode = false;
     ignorePress = true;
@@ -386,7 +307,7 @@ void loop()
     if (now-syncStart >= SYNC_TIME)
     {
       isSyncMode = false;
-      DEBUGln(F("SYNC MODE OFF"));
+      DEBUGln(F("\nSYNC MODE EXIT"));
       action(btnIndex, mode[btnIndex], false);
     }
   }
@@ -409,12 +330,13 @@ void loop()
     if (isSyncMode && radio.DATALEN == 5
         && radio.DATA[0]=='S' && radio.DATA[1]=='Y' && radio.DATA[2]=='N' && radio.DATA[3] == 'C' && radio.DATA[4]=='?')
     {
-      len = sprintf(buff,"SYNC%d:%d",btnIndex, mode[btnIndex]); //respond to SYNC request with this SM's button and mode information
+      //OLD:sprintf(buff,"SYNC%d:%d", btnIndex, mode[btnIndex]);
+      len = sprintf(buff,"SYNC%d:9", btnIndex); //respond to SYNC request with this SM's button and mode information
       radio.sendACK(buff, len);
       DEBUG(F(" - SYNC ACK sent : "));
       DEBUGln(buff);
       isSyncMode = false;
-      action(btnIndex, mode[btnIndex], false);
+      addSYNC(radio.SENDERID, btnIndex, 9); //action(btnIndex, mode[btnIndex], false);
       return; //continue loop
     }
 
@@ -453,7 +375,7 @@ void loop()
       //delay(5);
     }
   }
-  
+
   //check if a motion command timer expired and the corresponding light can turn off    
   if ((offTimer > 0) && (millis() - offTimer > MOTION_TIME_ON))
   {
@@ -475,8 +397,7 @@ void action(byte whichButtonIndex, byte whatMode, boolean notifyGateway)
   DEBUG(F("]:D"));
   DEBUG(btn[whichButtonIndex]);
   DEBUG(F(" - "));
-  //DEBUG(btn[whichButtonIndex]==BTNT?F("TOP:    "):btn[whichButtonIndex]==BTNM?F("MAIN:   "):btn[whichButtonIndex]==BTNB?F("BOTTOM: "):F("UNKNOWN"));
-  DEBUG(btn[whichButtonIndex]==BTNT?F("TOP:    "):btn[whichButtonIndex]==BTNB?F("BOTTOM: "):F("UNKNOWN"));
+  DEBUG(btn[whichButtonIndex]==BTNT?F("TOP:    "):btn[whichButtonIndex]==BTNM?F("MAIN:   "):btn[whichButtonIndex]==BTNB?F("BOTTOM: "):F("UNKNOWN"));
   DEBUG(whatMode==ON?F("ON "):F("OFF"));
 
   mode[whichButtonIndex] = whatMode;
@@ -526,7 +447,8 @@ boolean addSYNC(byte targetAddr, byte targetButton, byte targetMode)
     else if (SYNC_TO[i]==targetAddr &&   //save first slot that matches the same button with the same mode in this unit
                                          //but different target unit mode (cant have 2 opposing conditions so just override it)
            getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCBTN)==targetButton &&
-           getDigit(SYNC_INFO[i],SYNC_DIGIT_THISMODE)==mode[btnIndex]) //getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCNODE)!=targetMode)
+           (targetMode == 9 && getDigit(SYNC_INFO[i],SYNC_DIGIT_THISMODE)==90 || 
+            getDigit(SYNC_INFO[i],SYNC_DIGIT_THISMODE)==mode[btnIndex]))
     {
       emptySlot=i; //remember matching non-empty slot
       break; //stop as soon as we found a match
@@ -541,7 +463,10 @@ boolean addSYNC(byte targetAddr, byte targetButton, byte targetMode)
   else
   {
     SYNC_TO[emptySlot] = targetAddr;
-    SYNC_INFO[emptySlot] = targetMode*1000 + targetButton*100 + mode[btnIndex]*10 + btnIndex;
+    if (targetMode == 9)
+      SYNC_INFO[emptySlot] = 9000 + targetButton*100 + 90 + btnIndex;
+    else
+      SYNC_INFO[emptySlot] = targetMode*1000 + targetButton*100 + mode[btnIndex]*10 + btnIndex;
     DEBUG(F("Saving SYNC_TO["));
     DEBUG(emptySlot);
     DEBUG(F("]="));
@@ -559,15 +484,19 @@ boolean checkSYNC(byte nodeIDToSkip)
 {
   for (byte i=0; i < SYNC_MAX_COUNT; i++)
   {
-    if (SYNC_TO[i]!=0 && SYNC_TO[i]!=nodeIDToSkip && getDigit(SYNC_INFO[i],SYNC_DIGIT_THISBTN)==btnIndex && getDigit(SYNC_INFO[i],SYNC_DIGIT_THISMODE)==mode[btnIndex])
+    byte syncMode = getDigit(SYNC_INFO[i],SYNC_DIGIT_THISMODE);
+
+    //if (SYNC_TO[i]!=0 && SYNC_TO[i]!=nodeIDToSkip && getDigit(SYNC_INFO[i],SYNC_DIGIT_THISBTN)==btnIndex && getDigit(SYNC_INFO[i],SYNC_DIGIT_THISMODE)==mode[btnIndex])
+    if (SYNC_TO[i]!=0 && SYNC_TO[i]!=nodeIDToSkip && getDigit(SYNC_INFO[i],SYNC_DIGIT_THISBTN)==btnIndex && (syncMode==9 || syncMode==mode[btnIndex]))
     {
       DEBUGln();
       DEBUG(F(" SYNC["));
       DEBUG(SYNC_TO[i]);
       DEBUG(F(":"));
-      DEBUG(getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCMODE));
+      DEBUG(syncMode);
       DEBUG(F("]:"));
-      sprintf(buff, "BTN%d:%d", getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCBTN), getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCMODE));
+      //sprintf(buff, "BTN%d:%d", getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCBTN), getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCMODE));
+      sprintf(buff, "BTN%d:%d", getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCBTN), (syncMode==9?mode[btnIndex]:getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCMODE)));
       if (radio.sendWithRetry(SYNC_TO[i], buff, 6))
       {DEBUG(F("OK"));}
       else {DEBUG(F("NOK"));}
@@ -594,11 +523,15 @@ void saveSYNC()
 
 void displaySYNC()
 {
+  DEBUG('{');
   for (byte i=0; i < SYNC_MAX_COUNT; i++)
   {
+    DEBUG(SYNC_TO[i]);
+    DEBUG(':');
     DEBUG(SYNC_INFO[i]);
     if (i!=SYNC_MAX_COUNT-1) DEBUG(',');
   }
+  DEBUG('}');
 }
 
 //returns the Nth digit in an integer
@@ -633,9 +566,7 @@ void displayMainMenu()
   Serial.print  (F("| d - set description       (set to: '"));Serial.print(CONFIG.description);Serial.println(F("')"));
   Serial.println(F("| s - save CONFIG to EEPROM"));
   Serial.println(F("| E - erase whole EEPROM - [0..1023]"));
-  Serial.print  (F("| S - erase SYNC data ["));Serial.print(SYNC_EEPROM_ADDR);Serial.print(F(".."));Serial.print(SYNC_EEPROM_ADDR+3*SYNC_MAX_COUNT-1);Serial.print(F("]:["));
-  displaySYNC();
-  Serial.println(']');
+  Serial.print  (F("| S - erase SYNC data ")); displaySYNC(); Serial.println();
   Serial.println(F("| r - reboot"));
   Serial.println(F("| ESC - re-display config menu"));
   Serial.println(F("|-----------------------------------------------------------"));

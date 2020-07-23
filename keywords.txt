@@ -11,6 +11,7 @@
 #######################################
 RFM69	KEYWORD2
 RFM69_ATC	KEYWORD2
+RFM69Registers	KEYWORD2
 RFM69_OTA	KEYWORD2
 
 #######################################
@@ -29,7 +30,7 @@ getFrequency	KEYWORD2
 encrypt	KEYWORD2
 setCS	KEYWORD2
 readRSSI	KEYWORD2
-promiscuous	KEYWORD2
+spyMode	KEYWORD2
 setHighPower	KEYWORD2
 sleep	KEYWORD2
 readReg	KEYWORD2
@@ -40,6 +41,7 @@ setPowerLevel	KEYWORD2
 readTemperature	KEYWORD2
 rcCalibration	KEYWORD2
 readAllRegs	KEYWORD2
+readAllRegsCompact	KEYWORD2
 enableAutoPower	KEYWORD2
 
 CheckForSerialHEX	KEYWORD2
@@ -66,6 +68,7 @@ RF69_315MHZ	LITERAL1
 RF69_433MHZ	LITERAL1
 RF69_868MHZ	LITERAL1
 RF69_915MHZ	LITERAL1
+RF69_SPI_CS	LITERAL1
 #######################################
 # Variables/Volatiles (LITERAL2)
 #######################################
@@ -77,4 +80,4 @@ PAYLOADLEN	LITERAL2
 ACK_REQUESTED	LITERAL2
 ACK_RECEIVED	LITERAL2
 RSSI	LITERAL2
-RF69_LISTEN_BURST_REMAINING_MS LITERAL2
+RF69_LISTEN_BURST_REMAINING_MS	LITERAL2

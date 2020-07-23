@@ -106,8 +106,8 @@
 struct configuration {
   byte frequency;
   byte isHW;
-  byte nodeID;
-  byte networkID;
+  byte nodeID;    // 8bit address (up to 255)
+  byte networkID; // 8bit address (up to 255)
   char encryptionKey[16];
   byte separator1;
   char description[10];
@@ -147,12 +147,14 @@ byte btnLEDRED[] = {LED_RT, LED_RM, LED_RB};
 byte btnLEDGRN[] = {LED_GT, LED_GM, LED_GB};
 uint32_t lastSYNC=0; //remember last status change - used to detect & stop loop conditions in circular SYNC scenarios
 char * buff="justAnEmptyString";
+byte len=0;
 
 void setup(void)
 {
   #ifdef SERIAL_EN
     Serial.begin(SERIAL_BAUD);
   #endif
+  EEPROM.setMaxAllowedWrites(10000);
   EEPROM.readBlock(0, CONFIG);
   if (CONFIG.frequency!=RF69_433MHZ && CONFIG.frequency!=RF69_868MHZ && CONFIG.frequency!=RF69_915MHZ) // virgin CONFIG, expected [4,8,9]
   {
@@ -325,8 +327,8 @@ void loop()
     if (isSyncMode && radio.DATALEN == 5
         && radio.DATA[0]=='S' && radio.DATA[1]=='Y' && radio.DATA[2]=='N' && radio.DATA[3] == 'C' && radio.DATA[4]=='?')
     {
-      sprintf(buff,"SYNC%d:%d",btnIndex, mode[btnIndex]); //respond to SYNC request with this SM's button and mode information
-      radio.sendACK(buff, strlen(buff));
+      len = sprintf(buff,"SYNC%d:%d",btnIndex, mode[btnIndex]); //respond to SYNC request with this SM's button and mode information
+      radio.sendACK(buff, len);
       DEBUG(F(" - SYNC ACK sent : "));
       DEBUGln(buff);
       isSyncMode = false;
@@ -407,8 +409,8 @@ void action(byte whichButtonIndex, byte whatMode, boolean notifyGateway)
   //notify gateway
   if (notifyGateway)
   {
-    sprintf(buff, "BTN%d:%d", whichButtonIndex,whatMode);
-    if (radio.sendWithRetry(GATEWAYID, buff, strlen(buff), 5)) //up to 5 attempts
+    len = sprintf(buff, "BTN%d:%d", whichButtonIndex, whatMode);
+    if (radio.sendWithRetry(GATEWAYID, buff, len, 5)) //up to 5 attempts
       {DEBUGln(F("..OK"));}
     else {DEBUGln(F("..NOK"));}
   }
@@ -483,7 +485,7 @@ boolean checkSYNC(byte nodeIDToSkip)
       DEBUG(getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCMODE));
       DEBUG(F("]:"));
       sprintf(buff, "BTN%d:%d", getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCBTN), getDigit(SYNC_INFO[i],SYNC_DIGIT_SYNCMODE));
-      if (radio.sendWithRetry(SYNC_TO[i], buff,6))
+      if (radio.sendWithRetry(SYNC_TO[i], buff, 6))
       {DEBUG(F("OK"));}
       else {DEBUG(F("NOK"));}
     }

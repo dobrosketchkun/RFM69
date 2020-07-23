@@ -26,9 +26,9 @@
 // Please maintain this license information along with authorship
 // and copyright notices in any redistribution of this code
 // **********************************************************************************
-#include <RFM69_ATC.h>
-#include <RFM69.h>   // include the RFM69 library files as well
-#include <RFM69registers.h>
+#include "RFM69_ATC.h"
+#include "RFM69.h"   // include the RFM69 library files as well
+#include "RFM69registers.h"
 #include <SPI.h>
 
 volatile uint8_t RFM69_ATC::ACK_RSSI_REQUESTED;  // new type of flag on ACK_REQUEST
@@ -36,12 +36,13 @@ volatile uint8_t RFM69_ATC::ACK_RSSI_REQUESTED;  // new type of flag on ACK_REQU
 //=============================================================================
 // initialize() - some extra initialization before calling base class
 //=============================================================================
-bool RFM69_ATC::initialize(uint8_t freqBand, uint8_t nodeID, uint8_t networkID) {
+bool RFM69_ATC::initialize(uint8_t freqBand, uint16_t nodeID, uint8_t networkID) {
   _targetRSSI = 0;        // TomWS1: default to disabled
   _ackRSSI = 0;           // TomWS1: no existing response at init time
   ACK_RSSI_REQUESTED = 0; // TomWS1: init to none
   //_powerBoost = false;    // TomWS1: require someone to explicitly turn boost on!
   _transmitLevel = 31;    // TomWS1: match default value in PA Level register
+  _transmitLevelStep = 1; //increment 1 step at a time by default
   return RFM69::initialize(freqBand, nodeID, networkID);  // use base class to initialize most everything
 }
 
@@ -66,7 +67,7 @@ void RFM69_ATC::setMode(uint8_t newMode) {
 // should be called immediately after reception in case sender wants ACK
 void RFM69_ATC::sendACK(const void* buffer, uint8_t bufferSize) {
   ACK_REQUESTED = 0;   // TomWS1 added to make sure we don't end up in a timing race and infinite loop sending Acks
-  uint8_t sender = SENDERID;
+  uint16_t sender = SENDERID;
   int16_t _RSSI = RSSI; // save payload received RSSI value
   bool sendRSSI = ACK_RSSI_REQUESTED;  
   writeReg(REG_PACKETCONFIG2, (readReg(REG_PACKETCONFIG2) & 0xFB) | RF_PACKET2_RXRESTART); // avoid RX deadlocks
@@ -81,50 +82,53 @@ void RFM69_ATC::sendACK(const void* buffer, uint8_t bufferSize) {
 // sendFrame() - the basic version is used to match the RFM69 prototype so we can extend it
 //=============================================================================
 // this sendFrame is generally called by the internal RFM69 functions.  Simply transfer to our modified version.
-void RFM69_ATC::sendFrame(uint8_t toAddress, const void* buffer, uint8_t bufferSize, bool requestACK, bool sendACK) {
+void RFM69_ATC::sendFrame(uint16_t toAddress, const void* buffer, uint8_t bufferSize, bool requestACK, bool sendACK) {
   sendFrame(toAddress, buffer, bufferSize, requestACK, sendACK, false, 0);  // default sendFrame
 }
 
 //=============================================================================
 // sendFrame() - the new one with additional parameters.  This packages recv'd RSSI with the packet, if required.
 //=============================================================================
-void RFM69_ATC::sendFrame(uint8_t toAddress, const void* buffer, uint8_t bufferSize, bool requestACK, bool sendACK, bool sendRSSI, int16_t lastRSSI) {
+void RFM69_ATC::sendFrame(uint16_t toAddress, const void* buffer, uint8_t bufferSize, bool requestACK, bool sendACK, bool sendRSSI, int16_t lastRSSI) {
   setMode(RF69_MODE_STANDBY); // turn off receiver to prevent reception while filling fifo
   while ((readReg(REG_IRQFLAGS1) & RF_IRQFLAGS1_MODEREADY) == 0x00); // wait for ModeReady
-  writeReg(REG_DIOMAPPING1, RF_DIOMAPPING1_DIO0_00); // DIO0 is "Packet Sent"
-  
+  //writeReg(REG_DIOMAPPING1, RF_DIOMAPPING1_DIO0_00); // DIO0 is "Packet Sent"
+
   bufferSize += (sendACK && sendRSSI)?1:0;  // if sending ACK_RSSI then increase data size by 1
   if (bufferSize > RF69_MAX_DATA_LEN) bufferSize = RF69_MAX_DATA_LEN;
 
   // write to FIFO
   select();
-  SPI.transfer(REG_FIFO | 0x80);
-  SPI.transfer(bufferSize + 3);
-  SPI.transfer(toAddress);
-  SPI.transfer(_address);
+  _spi->transfer(REG_FIFO | 0x80);
+  _spi->transfer(bufferSize + 3);
+  _spi->transfer((uint8_t)toAddress); //lower 8bits
+  _spi->transfer((uint8_t)_address);  //lower 8bits
 
-  // control byte
+  // CTL (control byte)
+  uint8_t CTLbyte=0x0;
+  if (toAddress > 0xFF) CTLbyte |= (toAddress & 0x300) >> 6; //assign last 2 bits of address if > 255
+  if (_address > 0xFF) CTLbyte |= (_address & 0x300) >> 8;   //assign last 2 bits of address if > 255
   if (sendACK) {                   // TomWS1: adding logic to return ACK_RSSI if requested
-    SPI.transfer(RFM69_CTL_SENDACK | (sendRSSI?RFM69_CTL_RESERVE1:0));  // TomWS1  TODO: Replace with EXT1
+    _spi->transfer(CTLbyte | RFM69_CTL_SENDACK | (sendRSSI?RFM69_CTL_RESERVE1:0));  // TomWS1  TODO: Replace with EXT1
     if (sendRSSI) {
-      SPI.transfer(abs(lastRSSI)); //RSSI dBm is negative expected between [-100 .. -20], convert to positive and pass along as single extra header byte
+      _spi->transfer(abs(lastRSSI)); //RSSI dBm is negative expected between [-100 .. -20], convert to positive and pass along as single extra header byte
       bufferSize -=1;              // account for the extra ACK-RSSI 'data' byte
     }
   }
   else if (requestACK) {  // TODO: add logic to request ackRSSI with ACK - this is when both ends of a transmission would dial power down. May not work well for gateways in multi node networks
-    SPI.transfer(_targetRSSI ? RFM69_CTL_REQACK | RFM69_CTL_RESERVE1 : RFM69_CTL_REQACK);
+    _spi->transfer(CTLbyte | (_targetRSSI ? RFM69_CTL_REQACK | RFM69_CTL_RESERVE1 : RFM69_CTL_REQACK));
   }
-  else SPI.transfer(0x00);
+  else _spi->transfer(CTLbyte);
 
   for (uint8_t i = 0; i < bufferSize; i++)
-    SPI.transfer(((uint8_t*) buffer)[i]);
+    _spi->transfer(((uint8_t*) buffer)[i]);
   unselect();
 
   // no need to wait for transmit mode to be ready since its handled by the radio
   setMode(RF69_MODE_TX);
-  uint32_t txStart = millis();
-  while (digitalRead(_interruptPin) == 0 && millis() - txStart < RF69_TX_LIMIT_MS); // wait for DIO0 to turn HIGH signalling transmission finish
-  //while (readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PACKETSENT == 0x00); // wait for ModeReady
+  //uint32_t txStart = millis();
+  //while (digitalRead(_interruptPin) == 0 && millis() - txStart < RF69_TX_LIMIT_MS); // wait for DIO0 to turn HIGH signalling transmission finish
+  while ((readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PACKETSENT) == 0x00); // wait for PacketSent
   setMode(RF69_MODE_STANDBY);
 }
 
@@ -137,7 +141,7 @@ void RFM69_ATC::interruptHook(uint8_t CTLbyte) {
   if (ACK_RECEIVED && ACK_RSSI_REQUESTED) {
     // the next two bytes contain the ACK_RSSI (assuming the datalength is valid)
     if (DATALEN >= 1) {
-      _ackRSSI = -1 * SPI.transfer(0); //rssi was sent as single byte positive value, get the real value by * -1
+      _ackRSSI = -1 * _spi->transfer(0); //rssi was sent as single byte positive value, get the real value by * -1
       DATALEN -= 1;   // and compensate data length accordingly
       // TomWS1: Now dither transmitLevel value (register update occurs later when transmitting);
       if (_targetRSSI != 0) {
@@ -145,8 +149,13 @@ void RFM69_ATC::interruptHook(uint8_t CTLbyte) {
           // if (_ackRSSI < _targetRSSI && _transmitLevel < 51) _transmitLevel++;
           // else if (_ackRSSI > _targetRSSI && _transmitLevel > 32) _transmitLevel--;
         // } else {
-        if (_ackRSSI < _targetRSSI && _transmitLevel < 31) { _transmitLevel++; /*Serial.println("\n ======= _transmitLevel ++   ======");*/ }
-        else if (_ackRSSI > _targetRSSI && _transmitLevel > 0) { _transmitLevel--; /*Serial.println("\n ======= _transmitLevel --   ======");*/ }
+        if (_ackRSSI < _targetRSSI && _transmitLevel < 31)
+        {
+          _transmitLevel += _transmitLevelStep;
+          if (_transmitLevel > 31) _transmitLevel = 31;
+        }
+        else if (_ackRSSI > _targetRSSI && _transmitLevel > 0)
+          _transmitLevel--;
         //}
       }
     }
@@ -156,21 +165,20 @@ void RFM69_ATC::interruptHook(uint8_t CTLbyte) {
 //=============================================================================
 //  sendWithRetry() - overrides the base to allow increasing power when repeated ACK requests fail
 //=============================================================================
-bool RFM69_ATC::sendWithRetry(uint8_t toAddress, const void* buffer, uint8_t bufferSize, uint8_t retries, uint8_t retryWaitTime) {
+bool RFM69_ATC::sendWithRetry(uint16_t toAddress, const void* buffer, uint8_t bufferSize, uint8_t retries, uint8_t retryWaitTime) {
   uint32_t sentTime;
   for (uint8_t i = 0; i <= retries; i++)
   {
     send(toAddress, buffer, bufferSize, true);
     sentTime = millis();
     while (millis() - sentTime < retryWaitTime)
-    {
-      if (ACKReceived(toAddress))
-      {
-        return true;
-      }
+      if (ACKReceived(toAddress)) return true;
+    if (_transmitLevel < 31) {
+      _transmitLevel += _transmitLevelStep;
+      if (_transmitLevel > 31) _transmitLevel = 31;
     }
   }
-  if (_transmitLevel < 31) _transmitLevel++;
+
   return false;
 }
 
